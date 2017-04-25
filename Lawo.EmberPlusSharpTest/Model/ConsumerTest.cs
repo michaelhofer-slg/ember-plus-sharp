@@ -8,6 +8,7 @@ namespace Lawo.EmberPlusSharp.Model
 {
     using System;
     using System.Collections.Generic;
+    using System.Collections.ObjectModel;
     using System.Collections.Specialized;
     using System.ComponentModel;
     using System.Diagnostics;
@@ -830,6 +831,136 @@ namespace Lawo.EmberPlusSharp.Model
                 });
         }
 
+        /// <summary>Tests the main use cases of Ember+ matrices.</summary>
+        [TestMethod]
+        public void MatrixMainTest()
+        {
+            AsyncPump.Run(
+                async () =>
+                {
+                    await TestWithRobot<MatrixRoot>(
+                        async consumer =>
+                        {
+                            var matrix = consumer.Root.Sdn.Switching.Matrix0.Matrix;
+                            Assert.AreEqual("Matrix-0", matrix.Identifier);
+                            Assert.AreEqual("Matrix 0", matrix.Description);
+                            Assert.AreEqual(4, matrix.MaximumTotalConnects);
+                            Assert.AreEqual(1, matrix.MaximumConnectsPerTarget);
+                            CollectionAssert.AreEqual(new[] { 1, 1, 0, 2000 }, matrix.ParametersLocation?.ToArray());
+                            Assert.AreEqual(17, matrix.GainParameterNumber);
+                            Assert.AreEqual(1, matrix.Labels?.Count);
+                            Assert.AreEqual("Primary", matrix.Labels[0].Description);
+                            CollectionAssert.AreEqual(new[] { 1, 1, 0, 1000, 1 }, matrix.Labels[0].BasePath.ToArray());
+                            Assert.AreEqual(1, matrix.SchemaIdentifiers?.Count);
+                            Assert.AreEqual("com.company", matrix.SchemaIdentifiers[0]);
+
+                            CollectionAssert.AreEqual(new[] { 3001, 3002, 3003, 3004 }, matrix.Targets.ToArray());
+                            CollectionAssert.AreEqual(new[] { 0, 2711, 2712, 2713, 2714 }, matrix.Sources.ToArray());
+                            CollectionAssert.AreEqual(matrix.Targets.ToArray(), matrix.Connections.Keys.ToArray());
+
+                            foreach (var connection in matrix.Connections)
+                            {
+                                Assert.AreEqual(0, connection.Value.Single());
+                            }
+
+                            var labels = consumer.Root.Sdn.Switching.Matrix0.Labels.Children.Single();
+                            Assert.AreEqual("Primary", labels.Identifier);
+                            Assert.AreEqual(0, labels.Targets.Children.Count);
+                            Assert.AreEqual("Disconnected", labels.Sources.Children.Single().Value);
+
+                            var parameters = consumer.Root.Sdn.Switching.Matrix0.Parameters;
+                            Assert.AreEqual(matrix.Targets.Count, parameters.Targets.Children.Count);
+
+                            CollectionAssert.AreEqual(
+                                matrix.Targets.ToArray(), parameters.Targets.Children.Select(t => t.Number).ToArray());
+
+                            foreach (var target in parameters.Targets.Children)
+                            {
+                                Assert.AreEqual(0, target.Children.Count);
+                            }
+
+                            CollectionAssert.AreEqual(
+                                matrix.Sources.ToArray(), parameters.Sources.Children.Select(t => t.Number).ToArray());
+
+                            foreach (var source in parameters.Sources.Children)
+                            {
+                                Assert.AreEqual(0, source.Children.Count);
+                            }
+
+                            CollectionAssert.AreEqual(
+                                matrix.Connections.Keys.ToArray(),
+                                parameters.Connections.Children.Select(t => t.Number).ToArray());
+
+                            foreach (var target in matrix.Targets)
+                            {
+                                var targetParameters = parameters.Connections[target];
+
+                                CollectionAssert.AreEqual(
+                                    matrix.Sources.ToArray(),
+                                    targetParameters.Children.Select(t => t.Number).ToArray());
+
+                                foreach (var source in matrix.Sources)
+                                {
+                                    Assert.AreEqual(0, targetParameters[source].Children.Count);
+                                }
+                            }
+
+                            var targets = matrix.Targets;
+                            var sources = matrix.Sources;
+                            var connections = matrix.Connections;
+                            connections[targets[0]].Clear();
+                            connections[targets[0]].Add(sources[1]);
+                            await WaitAndAssertStableAsync(connections[targets[1]], new[] { sources[1] });
+                            connections[targets[0]].Clear();
+                            connections[targets[1]].Clear();
+                            await WaitAndAssertStableAsync(connections[targets[0]], new[] { sources[2], sources[4] });
+                            Assert.AreEqual(0, connections[targets[1]].Count);
+                            connections[targets[1]].Add(sources[0]);
+                            await WaitAndAssertStableAsync(
+                                connections[targets[0]], new[] { sources[1], sources[2], sources[3], sources[4] });
+                            connections[targets[0]].Remove(sources[1]);
+                            await WaitAndAssertStableAsync(connections[targets[0]], new[] { sources[2], sources[4] });
+                        },
+                        true,
+                        "MatrixMainLog.xml");
+                });
+        }
+
+        /// <summary>Tests default values for Ember+ matrices.</summary>
+        [TestMethod]
+        public void MatrixMinimalTest()
+        {
+            AsyncPump.Run(
+                async () =>
+                {
+                    await TestWithRobot<MatrixRoot>(
+                        consumer =>
+                        {
+                            var matrix = consumer.Root.Sdn.Switching.Matrix0.Matrix;
+                            Assert.AreEqual("Matrix-0", matrix.Identifier);
+                            Assert.AreEqual(4, matrix.MaximumTotalConnects);
+                            Assert.AreEqual(1, matrix.MaximumConnectsPerTarget);
+                            Assert.AreEqual(null, matrix.ParametersLocation);
+                            Assert.AreEqual(null, matrix.GainParameterNumber);
+                            Assert.AreEqual(null, matrix.Labels);
+                            Assert.AreEqual(null, matrix.SchemaIdentifiers);
+
+                            CollectionAssert.AreEqual(new[] { 0, 1, 2, 3 }, matrix.Targets.ToArray());
+                            CollectionAssert.AreEqual(new[] { 0, 1, 2, 3, 4 }, matrix.Sources.ToArray());
+                            CollectionAssert.AreEqual(matrix.Targets.ToArray(), matrix.Connections.Keys.ToArray());
+
+                            foreach (var connection in matrix.Connections)
+                            {
+                                Assert.AreEqual(0, connection.Value.Count);
+                            }
+
+                            return Task.FromResult(false);
+                        },
+                        true,
+                        "MatrixMinimalLog.xml");
+                });
+        }
+
         /// <summary>Tests the behavior when <see cref="Element.IsOnline"/> changes.</summary>
         [TestMethod]
         public void IsOnlineTest()
@@ -1391,6 +1522,21 @@ namespace Lawo.EmberPlusSharp.Model
                 true,
                 "Bug27Log.xml",
                 "false"));
+        }
+
+        /// <summary>Tests that Ember+ trees received with different <see cref="ChildrenRetrievalPolicy"/> have an equal
+        /// structure.</summary>
+        [TestMethod]
+        [TestCategory("Manual")]
+        public void Bug40Test()
+        {
+            AsyncPump.Run(
+                async () =>
+                {
+                    var automaticRoot = await GetTreeAsync(ChildrenRetrievalPolicy.All);
+                    var manualRoot = await GetTreeAsync(ChildrenRetrievalPolicy.DirectOnly);
+                    Compare(automaticRoot, manualRoot);
+                });
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1959,7 +2105,85 @@ namespace Lawo.EmberPlusSharp.Model
                 case TypeCode.Double:
                     return BitConverter.GetBytes((double)value);
                 default:
-                    throw new ArgumentException(string.Format(CultureInfo.InvariantCulture, "Unexpected type: {0}", value));
+                    throw new ArgumentException(
+                        string.Format(CultureInfo.InvariantCulture, "Unexpected type: {0}", value));
+            }
+        }
+
+        private static async Task WaitAndAssertStableAsync(ObservableCollection<int> collection, int[] expected)
+        {
+            var source = new TaskCompletionSource<bool>();
+            NotifyCollectionChangedEventHandler collectionChanged = null;
+
+            collectionChanged =
+                (s, e) =>
+                {
+                    if (collection.SequenceEqual(expected))
+                    {
+                        collection.CollectionChanged -= collectionChanged;
+                        source.SetResult(false);
+                    }
+                };
+
+            collection.CollectionChanged += collectionChanged;
+            await source.Task;
+
+            // The following two lines verify that the change we've detected above is not just an intermediate state.
+            await Task.Delay(250);
+            CollectionAssert.AreEqual(collection, expected);
+        }
+
+        private static async Task<EmptyDynamicRoot> GetTreeAsync(ChildrenRetrievalPolicy policy)
+        {
+            using (var tcpClient = new TcpClient())
+            {
+                await tcpClient.ConnectAsync("localhost", 8999);
+
+                using (var stream = tcpClient.GetStream())
+                using (var client = new S101Client(tcpClient, stream.ReadAsync, stream.WriteAsync))
+                using (var consumer = await Consumer<EmptyDynamicRoot>.CreateAsync(client, 10000, policy))
+                {
+                    if (policy != ChildrenRetrievalPolicy.All)
+                    {
+                        await RetrieveChildrenAsync(consumer, consumer.Root);
+                    }
+
+                    return consumer.Root;
+                }
+            }
+        }
+
+        private static async Task RetrieveChildrenAsync(Consumer<EmptyDynamicRoot> consumer, INode node)
+        {
+            foreach (IElement child in node.Children)
+            {
+                var childNode = child as INode;
+
+                if (childNode != null)
+                {
+                    childNode.ChildrenRetrievalPolicy = ChildrenRetrievalPolicy.DirectOnly;
+                    await consumer.SendAsync();
+                    await RetrieveChildrenAsync(consumer, childNode);
+                }
+            }
+        }
+
+        private static void Compare(INode expected, INode actual)
+        {
+            foreach (IElement expectedChild in expected.Children)
+            {
+                var actualChild = actual[expectedChild.Number];
+                Assert.IsNotNull(actualChild);
+                Assert.AreEqual(expectedChild.GetType(), actualChild.GetType());
+
+                var expectedChildNode = expectedChild as INode;
+
+                if (expectedChildNode != null)
+                {
+                    var actualChildNode = actualChild as INode;
+                    Assert.IsNotNull(actualChildNode);
+                    Compare(expectedChildNode, actualChildNode);
+                }
             }
         }
 
@@ -2072,6 +2296,39 @@ namespace Lawo.EmberPlusSharp.Model
                 false,
                 "StreamLog.xml",
                 args);
+        }
+
+        [SuppressMessage("Microsoft.Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated through reflection.")]
+        private sealed class MatrixRoot : Root<MatrixRoot>
+        {
+            [Element(Identifier = "SDN")]
+            public Sdn Sdn { get; private set; }
+        }
+
+        [SuppressMessage("Microsoft.Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated through reflection.")]
+        private sealed class Sdn : FieldNode<Sdn>
+        {
+            public Switching Switching { get; private set; }
+        }
+
+        [SuppressMessage("Microsoft.Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated through reflection.")]
+        private sealed class Switching : FieldNode<Switching>
+        {
+            [Element(Identifier = "Matrix-0")]
+            public Matrix0 Matrix0 { get; private set; }
+        }
+
+        [SuppressMessage("Microsoft.Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated through reflection.")]
+        private sealed class Matrix0 : FieldNode<Matrix0>
+        {
+            [Element(Identifier = "Matrix-0")]
+            public IMatrix Matrix { get; private set; }
+
+            [Element(Identifier = "labels", IsOptional = true)]
+            public CollectionNode<MatrixLabels> Labels { get; private set; }
+
+            [Element(Identifier = "parameters", IsOptional = true)]
+            public MatrixParameters<INode, INode, INode> Parameters { get; private set; }
         }
     }
 }
